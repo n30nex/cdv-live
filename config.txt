@@ -1,0 +1,7 @@
+MQTT_BROKER = "mqtt.mt.gt"
+MQTT_PORT = 1883
+MQTT_USER = "meshdev"
+MQTT_PASS = "large4cats"
+MQTT_TOPIC = "msh/#/"
+DEFAULT_KEY= "AQ=="
+# DECODE_KEYS = "base64key1,base64key2"

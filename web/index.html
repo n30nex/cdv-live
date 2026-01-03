@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Canadaverse MQTT Traffic</title>
+    <link rel="icon" href="favicon.ico?v=20260102-curvefix" />
+    <link rel="stylesheet" href="styles.css?v=20260102-curvefix" />
+    <script src="vendor/d3.v7.min.js?v=20260102-curvefix" defer></script>
+    <script src="app.js?v=20260102-curvefix" defer></script>
+  </head>
+  <body>
+    <div class="bg-glow"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo-dot"></span>
+        <div>
+          <div class="title">Canadaverse MQTT Traffic</div>
+          <div class="subtitle">Meshtastic MQTT Traffic Visualizer</div>
+        </div>
+      </div>
+      <div class="status">
+        <div class="status-item">
+          <span class="label">Broker</span>
+          <span id="brokerValue">-</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Topic</span>
+          <span id="topicValue">-</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Live</span>
+          <span id="liveStatus" class="pill pill-muted">Connecting</span>
+        </div>
+        <button id="pauseBtn" class="ghost-btn">Pause</button>
+        <button id="panelToggleAll" class="ghost-btn">Hide Panels</button>
+        <a class="ghost-btn" href="topomap.html">TopoMap</a>
+      </div>
+    </header>
+
+    <section class="filters">
+      <div class="filter-group">
+        <label for="windowSelect">Window</label>
+        <select id="windowSelect">
+          <option value="300">5m</option>
+          <option value="900">15m</option>
+          <option value="3600" selected>1h</option>
+          <option value="21600">6h</option>
+          <option value="86400">24h</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="portFilter">Port</label>
+        <select id="portFilter">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="channelFilter">Channel</label>
+        <select id="channelFilter">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="gatewayFilter">Gateway</label>
+        <input id="gatewayFilter" type="text" placeholder="Any gateway" />
+      </div>
+      <div class="filter-group search">
+        <label for="nodeSearch">Search</label>
+        <input id="nodeSearch" type="text" placeholder="Node or text" />
+      </div>
+    </section>
+
+    <main class="graph-stage">
+      <canvas id="graphCanvas"></canvas>
+      <div id="legend" class="legend legend-dock"></div>
+      <div class="graph-overlay">
+        <section class="panel graph-hud is-hidden" data-panel="graph" data-panel-label="Graph">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Live Mesh Graph</div>
+              <div id="graphStats" class="panel-meta">0 nodes - 0 links</div>
+            </div>
+            <div class="panel-actions">
+              <div id="graphTime" class="panel-meta">Last update -</div>
+              <button class="panel-toggle" data-panel="graph" aria-label="Hide graph panel">
+                Hide
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel metrics-panel is-hidden" data-panel="metrics" data-panel-label="Metrics">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Metrics</div>
+              <div class="panel-meta">Network pulse</div>
+            </div>
+            <button class="panel-toggle" data-panel="metrics" aria-label="Hide metrics panel">
+              Hide
+            </button>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="label">Packets/min</span>
+              <span id="metricPpm">-</span>
+            </div>
+            <div class="metric">
+              <span class="label">Active Nodes</span>
+              <span id="metricActive">-</span>
+            </div>
+            <div class="metric">
+              <span class="label">Top Port</span>
+              <span id="metricPort">-</span>
+            </div>
+            <div class="metric">
+              <span class="label">Median RSSI</span>
+              <span id="metricRssi">-</span>
+            </div>
+            <div class="metric">
+              <span class="label">Median SNR</span>
+              <span id="metricSnr">-</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel nodes-panel is-hidden" data-panel="nodes" data-panel-label="Nodes">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Nodes</div>
+              <div id="nodeCount" class="panel-meta">0 nodes</div>
+            </div>
+            <div class="panel-actions">
+              <div class="panel-meta">Most active first</div>
+              <button class="panel-toggle" data-panel="nodes" aria-label="Hide nodes panel">
+                Hide
+              </button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>Last Seen</th>
+                  <th>Packets</th>
+                  <th>RSSI</th>
+                </tr>
+              </thead>
+              <tbody id="nodeRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel details-panel is-hidden" data-panel="details" data-panel-label="Details">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Packet Details</div>
+              <div id="selectedMeta" class="panel-meta">Select a packet to inspect</div>
+            </div>
+            <div class="panel-actions">
+              <div id="detailType" class="pill pill-muted">--</div>
+              <button class="panel-toggle" data-panel="details" aria-label="Hide packet details">
+                Hide
+              </button>
+            </div>
+          </div>
+          <pre id="packetDetails" class="code-block">Waiting for packets...</pre>
+        </section>
+      </div>
+
+      <section class="panel feed-panel feed-dock is-hidden" data-panel="feed" data-panel-label="Feed">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Packet Feed</div>
+            <div id="packetCount" class="panel-meta">0 packets</div>
+          </div>
+          <div class="panel-actions">
+            <div class="panel-meta">Group by Portnum</div>
+            <button id="feedToggle" class="panel-toggle" aria-label="Expand packet feed">
+              Expand
+            </button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Signal</th>
+                <th>Channel</th>
+                <th>Hops</th>
+                <th>Gateway</th>
+                <th>Preview</th>
+              </tr>
+            </thead>
+            <tbody id="packetRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <aside id="nodeDrawer" class="node-drawer">
+      <div class="drawer-header">
+        <div>
+          <div id="drawerTitle" class="panel-title">Node</div>
+          <div id="drawerSubtitle" class="panel-meta">Select a node</div>
+        </div>
+        <button id="drawerClose" class="ghost-btn">Close</button>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Identity</div>
+        <div id="drawerIdentity" class="drawer-content">-</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Top Ports</div>
+        <div id="drawerPorts" class="drawer-content">-</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Top Peers</div>
+        <div id="drawerPeers" class="drawer-content">-</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Recent Packets</div>
+        <div id="drawerPackets" class="drawer-content">-</div>
+      </div>
+    </aside>
+
+    <aside id="panelControls" class="panel-controls is-collapsed">
+      <button
+        id="panelControlsToggle"
+        class="panel-controls-toggle"
+        aria-expanded="false"
+        aria-controls="panelControlsBody"
+      >
+        Panels
+      </button>
+      <div id="panelControlsBody" class="panel-controls-body">
+        <div class="panel-controls-header">
+          <div>
+            <div class="panel-title">Panels</div>
+            <div class="panel-meta">Toggle overlays</div>
+          </div>
+          <button id="panelControlsClose" class="ghost-btn">Close</button>
+        </div>
+        <div class="panel-controls-section">
+          <label class="panel-switch panel-switch-all">
+            <input id="panelAllToggle" type="checkbox" />
+            <span>All panels</span>
+          </label>
+          <div id="panelControlsList" class="panel-controls-list"></div>
+        </div>
+      </div>
+    </aside>
+
+    <div id="graphTooltip" class="graph-tooltip"></div>
+  </body>
+</html>

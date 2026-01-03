@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TopoMap | Canadaverse MQTT Traffic</title>
+    <link rel="icon" href="favicon.ico?v=20260102-curvefix" />
+    <link rel="stylesheet" href="styles.css?v=20260102-curvefix" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+    />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js" defer></script>
+    <script src="topomap.js?v=20260102-curvefix" defer></script>
+  </head>
+  <body class="topomap">
+    <div class="bg-glow"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo-dot"></span>
+        <div>
+          <div class="title">Canadaverse MQTT Traffic</div>
+          <div class="subtitle">TopoMap View</div>
+        </div>
+      </div>
+      <div class="status">
+        <div class="status-item">
+          <span class="label">Broker</span>
+          <span id="brokerValue">-</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Topic</span>
+          <span id="topicValue">-</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Live</span>
+          <span id="liveStatus" class="pill pill-muted">Connecting</span>
+        </div>
+        <button id="pauseBtn" class="ghost-btn">Pause</button>
+        <button id="recenterBtn" class="ghost-btn">Recenter</button>
+        <a class="ghost-btn" href="index.html">Graph</a>
+      </div>
+    </header>
+
+    <main class="map-stage">
+      <div id="map"></div>
+      <canvas id="mapCanvas"></canvas>
+      <div class="map-hud">
+        <section class="panel map-panel">
+          <div class="panel-title">TopoMap</div>
+          <div id="mapStats" class="panel-meta">0 positioned nodes</div>
+          <div id="mapFocus" class="panel-meta">Focus --</div>
+          <div id="mapTime" class="panel-meta">Last update -</div>
+        </section>
+        <section class="panel camera-panel">
+          <div class="panel-title">Camera</div>
+          <div class="camera-row">
+            <label class="label" for="pitchRange">Pitch</label>
+            <input id="pitchRange" type="range" min="0" max="75" step="1" />
+            <span id="pitchValue" class="panel-meta">--</span>
+          </div>
+          <div class="camera-row">
+            <label class="label" for="bearingRange">Bearing</label>
+            <input id="bearingRange" type="range" min="-180" max="180" step="1" />
+            <span id="bearingValue" class="panel-meta">--</span>
+          </div>
+          <div class="camera-actions">
+            <button id="cameraReset" class="ghost-btn">Reset</button>
+            <button id="cameraNorth" class="ghost-btn">North</button>
+            <button id="cameraFlat" class="ghost-btn">Flat</button>
+            <button id="glowToggle" class="ghost-btn active">Glow</button>
+          </div>
+        </section>
+      </div>
+      <div id="mapLegend" class="legend legend-dock map-legend"></div>
+    </main>
+  </body>
+</html>
