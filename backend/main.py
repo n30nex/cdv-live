@@ -263,8 +263,15 @@ def _make_mqtt_client(app: FastAPI, config):
             "to_label": _node_label(record.get("to_id"), node_cache),
         }
         _decorate_route_details(event, node_cache)
+
+        def _put_safe(q, item):
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                pass
+
         if _include_in_feed(event):
-            loop.call_soon_threadsafe(queue.put_nowait, event)
+            loop.call_soon_threadsafe(_put_safe, queue, event)
 
     client = Client(
         client_id="meshviz-decoder",
@@ -284,7 +291,7 @@ def _make_mqtt_client(app: FastAPI, config):
 def create_app() -> FastAPI:
     app = FastAPI()
     app.state.clients = set()
-    app.state.queue = asyncio.Queue()
+    app.state.queue = asyncio.Queue(maxsize=1000)
     app.state.db_lock = threading.Lock()
     app.state.loop = None
     app.state.dedupe = {}
@@ -541,14 +548,21 @@ async def _broadcast_loop(app: FastAPI) -> None:
         if not app.state.clients:
             continue
         payload = json.dumps(event)
-        stale = []
-        for ws in app.state.clients:
+        
+        clients = list(app.state.clients)
+        
+        async def _send(ws: WebSocket):
             try:
-                await ws.send_text(payload)
-            except Exception:
-                stale.append(ws)
-        for ws in stale:
-            app.state.clients.discard(ws)
+                await asyncio.wait_for(ws.send_text(payload), timeout=2.0)
+                return ws, None
+            except Exception as e:
+                return ws, e
+
+        results = await asyncio.gather(*[_send(ws) for ws in clients])
+        
+        for ws, error in results:
+            if error is not None:
+                app.state.clients.discard(ws)
 
 
 app = create_app()
