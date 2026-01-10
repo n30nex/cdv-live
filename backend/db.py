@@ -80,7 +80,16 @@ def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
+    return conn
+
+
+def connect_read(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA query_only = TRUE")
     return conn
 
 
@@ -112,7 +121,6 @@ def insert_packet(conn: sqlite3.Connection, packet: dict) -> int:
         """,
         payload,
     )
-    conn.commit()
     return cursor.lastrowid
 
 
@@ -128,7 +136,6 @@ def touch_node(conn: sqlite3.Connection, node_id: int | None) -> None:
         """,
         (node_id, now),
     )
-    conn.commit()
 
 
 def update_node(conn: sqlite3.Connection, node_id: int, long_name: str | None, short_name: str | None) -> None:
@@ -144,7 +151,6 @@ def update_node(conn: sqlite3.Connection, node_id: int, long_name: str | None, s
         """,
         (node_id, long_name, short_name, now),
     )
-    conn.commit()
 
 
 def fetch_packets(conn: sqlite3.Connection, limit: int) -> list[dict]:

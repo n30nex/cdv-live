@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import uvicorn
@@ -17,6 +18,7 @@ from paho.mqtt.client import Client, CallbackAPIVersion
 from .config import load_config
 from .db import (
     connect,
+    connect_read,
     fetch_channels_summary,
     fetch_graph,
     fetch_metric_counts,
@@ -235,25 +237,30 @@ def _make_mqtt_client(app: FastAPI, config):
                     sig: ts for sig, ts in app.state.dedupe.items() if ts >= cutoff
                 }
 
-            touch_node(conn, record.get("from_id"))
-            touch_node(conn, record.get("to_id"))
+            try:
+                touch_node(conn, record.get("from_id"))
+                touch_node(conn, record.get("to_id"))
 
-            if record.get("portnum") == portnums_pb2.PortNum.NODEINFO_APP:
-                user = details.get("user") if isinstance(details, dict) else None
-                if not isinstance(user, dict) and isinstance(details, dict):
-                    user = details
-                long_name = user.get("long_name") if isinstance(user, dict) else None
-                short_name = user.get("short_name") if isinstance(user, dict) else None
-                if record.get("from_id") is not None:
-                    update_node(conn, record["from_id"], long_name, short_name)
-                    cached = node_cache.get(record["from_id"], {})
-                    node_cache[record["from_id"]] = {
-                        **cached,
-                        "long_name": long_name or cached.get("long_name"),
-                        "short_name": short_name or cached.get("short_name"),
-                    }
+                if record.get("portnum") == portnums_pb2.PortNum.NODEINFO_APP:
+                    user = details.get("user") if isinstance(details, dict) else None
+                    if not isinstance(user, dict) and isinstance(details, dict):
+                        user = details
+                    long_name = user.get("long_name") if isinstance(user, dict) else None
+                    short_name = user.get("short_name") if isinstance(user, dict) else None
+                    if record.get("from_id") is not None:
+                        update_node(conn, record["from_id"], long_name, short_name)
+                        cached = node_cache.get(record["from_id"], {})
+                        node_cache[record["from_id"]] = {
+                            **cached,
+                            "long_name": long_name or cached.get("long_name"),
+                            "short_name": short_name or cached.get("short_name"),
+                        }
 
-            packet_id = insert_packet(conn, record)
+                packet_id = insert_packet(conn, record)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
         event = {
             **record,
@@ -341,10 +348,10 @@ def create_app() -> FastAPI:
         gateway: str | None = None,
     ):
         portnums = _parse_portnums(portnum)
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             if window or portnums or channel is not None or node is not None or gateway:
                 rows = fetch_packets_filtered(
-                    app.state.db,
+                    conn,
                     min(limit, 1000),
                     window_seconds=min(window or 0, 86400 * 7) if window else None,
                     portnums=portnums,
@@ -353,8 +360,8 @@ def create_app() -> FastAPI:
                     gateway_id=gateway,
                 )
             else:
-                rows = fetch_packets(app.state.db, min(limit, 1000))
-            nodes = fetch_nodes(app.state.db)
+                rows = fetch_packets(conn, min(limit, 1000))
+            nodes = fetch_nodes(conn)
         packets = [_packet_for_api(row, nodes) for row in rows]
         return [packet for packet in packets if _include_in_feed(packet)]
 
@@ -366,15 +373,15 @@ def create_app() -> FastAPI:
         gateway: str | None = None,
     ):
         portnums = _parse_portnums(portnum)
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             edges = fetch_graph(
-                app.state.db,
+                conn,
                 min(window, 86400 * 7),
                 portnums=portnums,
                 channel=channel,
                 gateway_id=gateway,
             )
-            node_info = fetch_nodes(app.state.db)
+            node_info = fetch_nodes(conn)
 
         nodes = {}
         links = []
@@ -413,9 +420,9 @@ def create_app() -> FastAPI:
         gateway: str | None = None,
     ):
         portnums = _parse_portnums(portnum)
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             rows = fetch_nodes_summary(
-                app.state.db,
+                conn,
                 min(window, 86400 * 7),
                 portnums=portnums,
                 channel=channel,
@@ -433,10 +440,10 @@ def create_app() -> FastAPI:
         gateway: str | None = None,
     ):
         portnums = _parse_portnums(portnum)
-        with app.state.db_lock:
-            nodes = fetch_nodes(app.state.db)
+        with closing(connect_read(app.state.config.db_path)) as conn:
+            nodes = fetch_nodes(conn)
             packets = fetch_node_packets(
-                app.state.db,
+                conn,
                 node_id,
                 min(window, 86400 * 7),
                 min(limit, 200),
@@ -445,7 +452,7 @@ def create_app() -> FastAPI:
                 gateway_id=gateway,
             )
             ports = fetch_node_ports(
-                app.state.db,
+                conn,
                 node_id,
                 min(window, 86400 * 7),
                 portnums=portnums,
@@ -453,7 +460,7 @@ def create_app() -> FastAPI:
                 gateway_id=gateway,
             )
             peers = fetch_node_peers(
-                app.state.db,
+                conn,
                 node_id,
                 min(window, 86400 * 7),
                 20,
@@ -478,9 +485,9 @@ def create_app() -> FastAPI:
     ):
         portnums = _parse_portnums(portnum)
         window = min(window, 86400 * 7)
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             data = fetch_metric_counts(
-                app.state.db,
+                conn,
                 window,
                 portnums=portnums,
                 channel=channel,
@@ -501,9 +508,9 @@ def create_app() -> FastAPI:
         channel: int | None = None,
         gateway: str | None = None,
     ):
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             rows = fetch_ports_summary(
-                app.state.db,
+                conn,
                 min(window, 86400 * 7),
                 channel=channel,
                 gateway_id=gateway,
@@ -517,9 +524,9 @@ def create_app() -> FastAPI:
         gateway: str | None = None,
     ):
         portnums = _parse_portnums(portnum)
-        with app.state.db_lock:
+        with closing(connect_read(app.state.config.db_path)) as conn:
             rows = fetch_channels_summary(
-                app.state.db,
+                conn,
                 min(window, 86400 * 7),
                 portnums=portnums,
                 gateway_id=gateway,

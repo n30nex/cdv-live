@@ -51,6 +51,11 @@ const LINK_BASE_WIDTH = 1.6;
 const TRAIL_FADE_MS = 45000;
 const TRAIL_MAX_COUNT = 1800;
 const ROUTE_HISTORY_MAX = 200;
+const FETCH_TIMEOUT_MS = 10000;
+const HISTORY_PACKET_LIMIT = 500;
+const HISTORY_WINDOW_SECONDS = 86400;
+const HISTORY_BATCH_BUDGET_MS = 8;
+const MAP_LOAD_TIMEOUT_MS = 15000;
 
 const palette = [
   "#5ad8c8",
@@ -80,26 +85,58 @@ const cameraReset = document.getElementById("cameraReset");
 const cameraNorth = document.getElementById("cameraNorth");
 const cameraFlat = document.getElementById("cameraFlat");
 const glowToggle = document.getElementById("glowToggle");
+const loadingOverlay = document.getElementById("loadingOverlay");
+const loadingStatus = document.getElementById("loadingStatus");
+let loadingHidden = false;
 
 function updateLiveStatus() {
   liveStatus.classList.remove("pill-muted", "live");
   if (state.connection === "disconnected") {
     liveStatus.textContent = "Disconnected";
     liveStatus.classList.add("pill-muted");
-    return;
-  }
-  if (state.paused) {
+  } else if (state.paused) {
     liveStatus.textContent = "Paused";
     liveStatus.classList.add("pill-muted");
-    return;
-  }
-  if (state.connection === "live") {
+  } else if (state.connection === "live") {
     liveStatus.textContent = "Live";
     liveStatus.classList.add("live");
+  } else {
+    liveStatus.textContent = "Connecting";
+    liveStatus.classList.add("pill-muted");
+  }
+  updateLoadingState();
+}
+
+function setLoadingHidden(hidden) {
+  if (!loadingOverlay || loadingHidden === hidden) {
     return;
   }
-  liveStatus.textContent = "Connecting";
-  liveStatus.classList.add("pill-muted");
+  loadingHidden = hidden;
+  loadingOverlay.classList.toggle("is-hidden", hidden);
+}
+
+function updateLoadingState() {
+  if (!loadingOverlay || loadingHidden) {
+    return;
+  }
+  const hasNodes = state.nodes.size > 0 || state.nodeNames.size > 0;
+  const hasTraffic = state.links.size > 0 || state.lastUpdate !== null;
+  if (hasNodes || hasTraffic) {
+    setLoadingHidden(true);
+    return;
+  }
+  if (!loadingStatus) {
+    return;
+  }
+  if (state.connection === "disconnected") {
+    loadingStatus.textContent = "Disconnected. Retrying...";
+  } else if (state.paused) {
+    loadingStatus.textContent = "Paused. Waiting for traffic...";
+  } else if (state.connection === "live") {
+    loadingStatus.textContent = "Connected. Waiting for traffic...";
+  } else {
+    loadingStatus.textContent = "Connecting to live feed...";
+  }
 }
 
 function colorForPort(portnum) {
@@ -285,15 +322,29 @@ function setFocusNode(nodeId) {
   updateFocusDisplay();
 }
 
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FETCH_TIMEOUT_MS;
+  const hasAbort = typeof AbortController !== "undefined";
+  const controller = hasAbort ? new AbortController() : null;
+  const timeoutId = hasAbort && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined,
+    });
     if (!response.ok) {
       return null;
     }
     return await response.json();
   } catch (error) {
     return null;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 function ensureNode(nodeId, label) {
@@ -584,6 +635,8 @@ function ingestPacket(packet, options = {}) {
   const portname = normalized.portname || "UNKNOWN";
   const isBroadcast = target === BROADCAST_ID;
   const animate = options.animate !== false;
+  const batch = options.batch === true;
+  const includeRoutes = options.includeRoutes !== false;
 
   if (normalized.portname === "NODEINFO_APP") {
     const info = parseNodeInfo(normalized.details);
@@ -675,11 +728,50 @@ function ingestPacket(packet, options = {}) {
     }
   }
 
-  animateRouteForPacket(normalized);
+  if (includeRoutes) {
+    animateRouteForPacket(normalized);
+  }
 
   state.lastUpdate = normalized.created_at || Math.floor(Date.now() / 1000);
-  updateLegend(state.links);
-  updateStats();
+  if (!batch) {
+    updateLegend(state.links);
+    updateStats();
+  }
+  updateLoadingState();
+}
+
+function ingestPacketBatch(packets, options = {}) {
+  if (!Array.isArray(packets) || packets.length === 0) {
+    return Promise.resolve();
+  }
+  const total = packets.length;
+  let index = 0;
+  const ingestOptions = { ...options, batch: true };
+
+  return new Promise((resolve) => {
+    const step = () => {
+      const start = performance.now();
+      while (index < total && performance.now() - start < HISTORY_BATCH_BUDGET_MS) {
+        ingestPacket(packets[index], ingestOptions);
+        index += 1;
+      }
+      if (mapStats && index < total) {
+        mapStats.textContent = `Loading history ${index}/${total}...`;
+      }
+      if (loadingStatus && index < total) {
+        loadingStatus.textContent = `Loading history ${index}/${total}...`;
+      }
+      if (index < total) {
+        requestAnimationFrame(step);
+      } else {
+        updateLegend(state.links);
+        updateStats();
+        updateLoadingState();
+        resolve();
+      }
+    };
+    requestAnimationFrame(step);
+  });
 }
 
 function connectWs() {
@@ -896,6 +988,28 @@ map.dragRotate.enable();
 map.touchZoomRotate.enableRotation();
 map.touchPitch.enable();
 map.keyboard.enable();
+
+const FALLBACK_STYLE = {
+  version: 8,
+  sources: {},
+  layers: [
+    {
+      id: "background",
+      type: "background",
+      paint: {
+        "background-color": "#0b1218",
+      },
+    },
+  ],
+};
+
+let fallbackApplied = false;
+const mapLoadTimer = window.setTimeout(() => {
+  if (!map.loaded() && !fallbackApplied) {
+    fallbackApplied = true;
+    map.setStyle(FALLBACK_STYLE, { diff: false });
+  }
+}, MAP_LOAD_TIMEOUT_MS);
 
 function findFirstSymbolLayerId(style) {
   if (!style || !Array.isArray(style.layers)) {
@@ -2181,13 +2295,25 @@ async function bootstrap() {
   updateStats();
   updateFocusDisplay();
 
-  const health = await fetchJson("/api/health");
+  connectWs();
+
+  const healthPromise = fetchJson("/api/health");
+  const nodesPromise = fetchJson(`/api/nodes?window=${HISTORY_WINDOW_SECONDS}`);
+  const packetsPromise = fetchJson(
+    `/api/packets?limit=${HISTORY_PACKET_LIMIT}&window=${HISTORY_WINDOW_SECONDS}`,
+  );
+
+  const [health, nodesData, packetsData] = await Promise.all([
+    healthPromise,
+    nodesPromise,
+    packetsPromise,
+  ]);
+
   if (health) {
     brokerValue.textContent = health.broker || "--";
     topicValue.textContent = health.topic || "--";
   }
 
-  const nodesData = await fetchJson("/api/nodes?window=86400");
   if (Array.isArray(nodesData)) {
     nodesData.forEach((node) => {
       const label = nodeLabelFromInfo(node.node_id, node);
@@ -2195,24 +2321,28 @@ async function bootstrap() {
     });
   }
 
-  const packetsData = await fetchJson("/api/packets?limit=1000");
+  let historyLoaded = false;
   if (Array.isArray(packetsData)) {
-    packetsData
-      .slice()
-      .reverse()
-      .forEach((packet) => {
-        ingestPacket(packet, { animate: false });
-      });
+    historyLoaded = true;
+    const history = packetsData.slice().reverse();
+    await ingestPacketBatch(history, { animate: false, includeRoutes: false });
   }
 
-  updateLegend(state.links);
-  updateStats();
-  connectWs();
+  if (!historyLoaded) {
+    updateLegend(state.links);
+    updateStats();
+  }
+  updateLoadingState();
 }
 
 map.on("load", () => {
-  addTerrain(map);
-  addBuildings(map);
+  if (mapLoadTimer) {
+    clearTimeout(mapLoadTimer);
+  }
+  if (!fallbackApplied) {
+    addTerrain(map);
+    addBuildings(map);
+  }
   setupCameraControls();
   setupMiddleMouseCameraControls();
   bootstrap();

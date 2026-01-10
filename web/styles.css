@@ -525,6 +525,77 @@ body.panel-dragging {
   padding: 10px;
 }
 
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(1200px 700px at 20% 20%, rgba(90, 216, 200, 0.12) 0%, transparent 60%),
+    rgba(9, 15, 22, 0.72);
+  backdrop-filter: blur(6px);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.35s ease, visibility 0.35s ease;
+  pointer-events: none;
+}
+
+.loading-overlay.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.loading-card {
+  display: grid;
+  gap: 12px;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 18px 20px;
+  text-align: center;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 14, 20, 0.88);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+.loading-spinner {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 3px solid rgba(95, 227, 208, 0.2);
+  border-top-color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+.loading-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loading-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.loading-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  display: block;
+  width: 45%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(95, 227, 208, 0.2), rgba(95, 227, 208, 0.9), rgba(247, 201, 75, 0.75));
+  animation: loadingSweep 1.2s ease-in-out infinite;
+}
+
 .graph-tooltip {
   position: fixed;
   pointer-events: none;
@@ -711,6 +782,24 @@ body.drawer-open .panel-controls {
   }
   100% {
     box-shadow: 0 0 0 rgba(95, 227, 208, 0.1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes loadingSweep {
+  0% {
+    transform: translateX(-60%);
+  }
+  50% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(140%);
   }
 }
 

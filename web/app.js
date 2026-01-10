@@ -71,6 +71,7 @@ const HOVER_INDEX_REFRESH_MS = 120;
 const HOVER_MAX_RADIUS = 26;
 const PACKET_FLUSH_BUDGET_MS = 6;
 const STATS_UPDATE_INTERVAL_MS = 600;
+const FETCH_TIMEOUT_MS = 10000;
 
 const palette = [
   "#5ad8c8",
@@ -141,6 +142,9 @@ const packetQueue = [];
 let packetFlushPending = false;
 const MAX_PACKETS_PER_FLUSH = 200;
 let lastStatsUpdate = 0;
+const loadingOverlay = document.getElementById("loadingOverlay");
+const loadingStatus = document.getElementById("loadingStatus");
+let loadingHidden = false;
 
 document.querySelectorAll(".panel[data-panel]").forEach((panel) => {
   panelMap.set(panel.dataset.panel, panel);
@@ -213,6 +217,38 @@ if (nodeRows) {
 drawerClose.addEventListener("click", () => {
   closeNodeDrawer();
 });
+
+function setLoadingHidden(hidden) {
+  if (!loadingOverlay || loadingHidden === hidden) {
+    return;
+  }
+  loadingHidden = hidden;
+  loadingOverlay.classList.toggle("is-hidden", hidden);
+}
+
+function updateLoadingState() {
+  if (!loadingOverlay || loadingHidden) {
+    return;
+  }
+  const hasNodes = state.nodesSummary.length > 0;
+  const hasTraffic = state.packets.length > 0 || state.links.size > 0;
+  if (hasNodes || hasTraffic) {
+    setLoadingHidden(true);
+    return;
+  }
+  if (!loadingStatus) {
+    return;
+  }
+  if (state.connection === "disconnected") {
+    loadingStatus.textContent = "Disconnected. Retrying...";
+  } else if (state.paused) {
+    loadingStatus.textContent = "Paused. Waiting for traffic...";
+  } else if (state.connection === "live") {
+    loadingStatus.textContent = "Connected. Waiting for traffic...";
+  } else {
+    loadingStatus.textContent = "Connecting to live feed...";
+  }
+}
 
 function updatePanelToggleAll() {
   if (!panelToggleAll) return;
@@ -723,20 +759,17 @@ function updateLiveStatus() {
   if (state.connection === "disconnected") {
     liveStatus.textContent = "Disconnected";
     liveStatus.classList.add("pill-muted");
-    return;
-  }
-  if (state.paused) {
+  } else if (state.paused) {
     liveStatus.textContent = "Paused";
     liveStatus.classList.add("pill-muted");
-    return;
-  }
-  if (state.connection === "live") {
+  } else if (state.connection === "live") {
     liveStatus.textContent = "Live";
     liveStatus.classList.add("live");
-    return;
+  } else {
+    liveStatus.textContent = "Connecting";
+    liveStatus.classList.add("pill-muted");
   }
-  liveStatus.textContent = "Connecting";
-  liveStatus.classList.add("pill-muted");
+  updateLoadingState();
 }
 
 function colorForPort(portnum) {
@@ -1327,7 +1360,8 @@ function applyGraphData(graphData) {
   (graphData.links || []).forEach((link) => {
     const key = `${link.source}-${link.target}-${link.portnum}`;
     const existing = state.links.get(key);
-    const lastSeen = existing ? existing.lastSeen : 0;
+    const apiLastSeen = link.last_seen || 0;
+    const lastSeen = Math.max(existing ? existing.lastSeen || 0 : 0, apiLastSeen);
     const heat = existing ? existing.heat || 0 : 0;
     const lastHeatAt = existing ? existing.lastHeatAt || 0 : 0;
     newLinks.set(key, {
@@ -1342,6 +1376,7 @@ function applyGraphData(graphData) {
     });
   });
   state.links = newLinks;
+  updateLoadingState();
 }
 
 function applyNodesSummary(nodes) {
@@ -1381,11 +1416,13 @@ function applyNodesSummary(nodes) {
     }
   });
   state.nodeNames = nameMap;
+  updateLoadingState();
 }
 
 function applyPacketsData(packets) {
   state.packets = packets.map((packet) => normalizePacket(packet));
   state.lastUpdate = state.packets.length ? state.packets[0].created_at : null;
+  updateLoadingState();
 }
 
 function ensureNode(nodeId, label, options = {}) {
@@ -1880,15 +1917,29 @@ function closeNodeDrawer() {
   clearNodeSelection({ keepDrawer: false });
 }
 
-async function fetchJson(path) {
+async function fetchJson(path, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : FETCH_TIMEOUT_MS;
+  const hasAbort = typeof AbortController !== "undefined";
+  const controller = hasAbort ? new AbortController() : null;
+  const timeoutId = hasAbort && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
   try {
-    const response = await fetch(path);
+    const response = await fetch(path, {
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined,
+    });
     if (!response.ok) {
       return null;
     }
     return await response.json();
   } catch (error) {
     return null;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -2081,6 +2132,7 @@ async function refreshAll() {
   renderNodes();
   renderPackets();
   updateGraphView({ reheat: true });
+  updateLoadingState();
 }
 
 async function refreshSummary() {
@@ -2117,6 +2169,7 @@ async function refreshSummary() {
 
   renderNodes();
   updateGraphView({ reheat: false });
+  updateLoadingState();
 }
 
 function populatePortFilter(ports) {
@@ -2170,6 +2223,7 @@ function connectWs() {
     if (state.paused) return;
     const packet = normalizePacket(JSON.parse(event.data));
     enqueuePacket(packet);
+    updateLoadingState();
   });
 
   socket.addEventListener("close", () => {
@@ -3567,8 +3621,8 @@ async function bootstrap() {
     return;
   }
 
-  await refreshAll();
   connectWs();
+  await refreshAll();
 
   state.refreshTimer = setInterval(() => {
     if (!state.paused) {
